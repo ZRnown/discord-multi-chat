@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Discord Multi-Chat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ========== SIDEBAR ========== -->
+<div id="sidebar">
+  <!-- Account header -->
+  <div id="accounts-header">
+    <span class="section-title">Accounts</span>
+    <button id="btn-add-account" title="Add Account">+</button>
+  </div>
+  <div id="accounts-list"></div>
+
+  <div class="divider"></div>
+
+  <!-- Friends list -->
+  <div id="friends-header">
+    <span class="section-title">Direct Messages</span>
+  </div>
+  <div id="friends-list"></div>
+</div>
+
+<!-- ========== CHAT PANEL ========== -->
+<div id="chat-panel">
+  <!-- Chat top bar -->
+  <div id="chat-topbar">
+    <div id="chat-friend-info">
+      <div id="chat-friend-avatar">?</div>
+      <div id="chat-friend-name">Select a friend to chat</div>
+    </div>
+  </div>
+
+  <!-- Messages area -->
+  <div id="messages-container">
+    <div id="messages-list"></div>
+  </div>
+
+  <!-- Input area -->
+  <div id="input-area">
+    <div id="attachment-preview"></div>
+    <div id="input-row">
+      <button id="btn-attach" title="Attach file">📎</button>
+      <input type="file" id="file-input" multiple hidden>
+      <textarea id="message-input" placeholder="Type a message..." rows="1" disabled></textarea>
+      <button id="btn-emoji" title="Emoji">😊</button>
+      <button id="btn-send" disabled>Send</button>
+    </div>
+    <div id="emoji-picker" class="hidden"></div>
+  </div>
+</div>
+
+<!-- ========== LOGIN MODAL ========== -->
+<div id="login-modal" class="modal">
+  <div class="modal-content">
+    <h2>Add Discord Account</h2>
+    <p>Enter your Discord user token to login.</p>
+    <p class="hint">You can get your token from Discord's DevTools → Network tab → Authorization header.</p>
+    <input type="password" id="login-token-input" placeholder="Paste your token here...">
+    <div class="modal-buttons">
+      <button id="btn-login-submit">Login</button>
+      <button id="btn-login-cancel" class="btn-secondary">Cancel</button>
+    </div>
+    <div id="login-error" class="error-text hidden"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
