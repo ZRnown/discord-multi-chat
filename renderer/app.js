@@ -1,5 +1,6 @@
 // ============================================
-// Discord Multi-Chat — Renderer App
+// Discord Multi-Chat — Renderer App (中文版 v2)
+// Features: 账号分组好友, 按最近消息排序, 头像代理缓存, 自定义表情
 // ============================================
 
 const API_BASE = 'http://127.0.0.1:7233';
@@ -8,9 +9,13 @@ const API_BASE = 'http://127.0.0.1:7233';
 let accounts = [];
 let friends = {};
 let selectedFriendId = null;
+let selectedAccountId = null; // which account to use for sending
 
 // Attachment queue
 let pendingFiles = [];
+
+// Collapsible group state (which account groups are expanded)
+let collapsedGroups = new Set();
 
 // EM (emoji shortcodes → emoji)
 const EMOJI_MAP = {
@@ -50,6 +55,9 @@ const EMOJI_MAP = {
 
 const EMOJI_LIST = Object.values([...new Set(Object.values(EMOJI_MAP))]);
 
+// Custom emoji cache per account
+let customEmojis = {}; // {account_id: [emojis]}
+
 // ============================================
 // DOM refs
 // ============================================
@@ -87,6 +95,17 @@ async function api(method, path, body, isForm = false) {
 }
 
 // ============================================
+// Avatar proxy helper — route Discord CDN through backend cache
+// ============================================
+function avatarUrl(url) {
+  if (!url) return '';
+  if (url.includes('discordapp.com') || url.includes('discord.com')) {
+    return `${API_BASE}/avatar?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
+
+// ============================================
 // Init
 // ============================================
 async function init() {
@@ -101,7 +120,7 @@ async function loadAccounts() {
     accounts = data.accounts || [];
     renderAccounts();
   } catch (e) {
-    console.error('Failed to load accounts:', e);
+    console.error('加载账号失败:', e);
     accounts = [];
     renderAccounts();
   }
@@ -113,7 +132,7 @@ async function loadFriends() {
     friends = data.friends || {};
     renderFriends();
   } catch (e) {
-    console.error('Failed to load friends:', e);
+    console.error('加载好友失败:', e);
     friends = {};
     renderFriends();
   }
@@ -124,20 +143,21 @@ async function loadFriends() {
 // ============================================
 function renderAccounts() {
   if (accounts.length === 0) {
-    accountsList.innerHTML = '<div class="empty-state">No accounts. Click + to add one.</div>';
+    accountsList.innerHTML = '<div class="empty-state">暂无账号，点击 + 添加</div>';
     return;
   }
   accountsList.innerHTML = accounts.map(a => {
     const initial = (a.name || '?')[0]?.toUpperCase() || '?';
-    const avatarHtml = a.avatar_url
-      ? `<img src="${escHtml(a.avatar_url)}" alt="${escHtml(a.name)}">`
+    const avatarSrc = avatarUrl(a.avatar_url);
+    const avatarHtml = avatarSrc
+      ? `<img src="${escHtml(avatarSrc)}" alt="${escHtml(a.name)}">`
       : initial;
     return `
     <div class="account-item" data-account-id="${escHtml(a.account_id)}">
       <div class="account-avatar">${avatarHtml}</div>
       <div class="account-info">
-        <div class="account-name">${escHtml(a.name || 'Unknown')}</div>
-        <div class="account-status">Online</div>
+        <div class="account-name">${escHtml(a.name || '未知')}</div>
+        <div class="account-status">在线</div>
       </div>
       <button class="account-remove" data-remove="${escHtml(a.account_id)}">×</button>
     </div>`;
@@ -157,51 +177,128 @@ function renderAccounts() {
 }
 
 // ============================================
-// Render: Friends
+// Render: Friends — grouped by account, collapsible
 // ============================================
 function renderFriends() {
   const entries = Object.entries(friends);
   if (entries.length === 0) {
-    friendsList.innerHTML = '<div class="empty-state">No friends loaded</div>';
+    friendsList.innerHTML = '<div class="empty-state">暂无私信</div>';
     return;
   }
 
-  // Sort: online first, then alphabetically
+  // Sort friends: by last_message_time descending (most recent first), then alphabetically
   entries.sort((a, b) => {
-    const aOnline = a[1].status === 'online' || a[1].status === 'idle' ? 0 : 1;
-    const bOnline = b[1].status === 'online' || b[1].status === 'idle' ? 0 : 1;
-    if (aOnline !== bOnline) return aOnline - bOnline;
+    const aTime = a[1].last_message_time || 0;
+    const bTime = b[1].last_message_time || 0;
+    if (aTime !== bTime) return bTime - aTime; // most recent first
     return (a[1].name || '').localeCompare(b[1].name || '');
   });
 
-  friendsList.innerHTML = entries.map(([fid, f]) => {
-    const initial = (f.name || '?')[0]?.toUpperCase() || '?';
-    const avatarHtml = f.avatar_url
-      ? `<img src="${escHtml(f.avatar_url)}" alt="">`
-      : initial;
-    const tagsHtml = (f.account_names || []).slice(0, 3).map(n =>
-      `<span class="friend-tag">${escHtml(n)}</span>`
-    ).join('');
+  // Group by account
+  const groups = {}; // {account_id: {name, friends: []}}
+  const noAccountFriends = []; // friends with no account_ids (shouldn't happen but safe)
 
-    const activeClass = selectedFriendId === fid ? ' active' : '';
+  for (const [fid, f] of entries) {
+    if (!f.account_ids || f.account_ids.length === 0) {
+      noAccountFriends.push([fid, f]);
+      continue;
+    }
+    // Use first account as the group
+    const accId = f.account_ids[0];
+    if (!groups[accId]) {
+      const accName = f.account_names?.[0] || 'Unknown';
+      groups[accId] = { name: accName, friends: [] };
+    }
+    groups[accId].friends.push([fid, f]);
+  }
 
-    return `
-    <div class="friend-item${activeClass}" data-friend-id="${escHtml(fid)}">
-      <div class="friend-avatar">
-        ${avatarHtml}
-        <div class="friend-status-dot ${f.status || 'offline'}"></div>
+  // Sort groups by most recent message time across all friends in the group
+  const groupEntries = Object.entries(groups).sort((a, b) => {
+    const aMax = Math.max(0, ...a[1].friends.map(([, f]) => f.last_message_time || 0));
+    const bMax = Math.max(0, ...b[1].friends.map(([, f]) => f.last_message_time || 0));
+    return bMax - aMax;
+  });
+
+  // Build HTML
+  let html = '';
+
+  for (const [accId, group] of groupEntries) {
+    const isCollapsed = collapsedGroups.has(accId);
+    const friendCount = group.friends.length;
+
+    html += `
+    <div class="friend-group" data-account-id="${escHtml(accId)}">
+      <div class="friend-group-header">
+        <span class="group-collapse-icon">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="group-name">${escHtml(group.name)}</span>
+        <span class="group-count">${friendCount}</span>
       </div>
-      <div class="friend-info">
-        <div class="friend-name">${escHtml(f.name)}</div>
-        <div class="friend-account-tags">${tagsHtml}</div>
-      </div>
+      ${isCollapsed ? '' : group.friends.map(([fid, f]) => renderFriendItem(fid, f)).join('')}
     </div>`;
-  }).join('');
+  }
 
-  // Click handlers
+  // Add ungrouped friends
+  if (noAccountFriends.length > 0) {
+    html += noAccountFriends.map(([fid, f]) => renderFriendItem(fid, f)).join('');
+  }
+
+  friendsList.innerHTML = html;
+
+  // Group header click — toggle collapse
+  friendsList.querySelectorAll('.friend-group-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const groupId = header.parentElement.dataset.accountId;
+      if (collapsedGroups.has(groupId)) {
+        collapsedGroups.delete(groupId);
+      } else {
+        collapsedGroups.add(groupId);
+      }
+      renderFriends();
+    });
+  });
+
+  // Friend item click
   friendsList.querySelectorAll('.friend-item').forEach(el => {
     el.addEventListener('click', () => selectFriend(el.dataset.friendId));
   });
+}
+
+function renderFriendItem(fid, f) {
+  const avatarSrc = avatarUrl(f.avatar_url);
+  const initial = (f.name || '?')[0]?.toUpperCase() || '?';
+  const avatarHtml = avatarSrc
+    ? `<img src="${escHtml(avatarSrc)}" alt="">`
+    : initial;
+  const activeClass = selectedFriendId === fid ? ' active' : '';
+  const unread = f.unread_count || 0;
+  const unreadHtml = unread > 0 ? `<span class="unread-badge">${unread}</span>` : '';
+
+  // Show last message time
+  let timeHtml = '';
+  if (f.last_message_time) {
+    const d = new Date(f.last_message_time * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      timeHtml = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      timeHtml = (d.getMonth() + 1) + '/' + d.getDate();
+    }
+  }
+
+  return `
+  <div class="friend-item${activeClass}" data-friend-id="${escHtml(fid)}">
+    <div class="friend-avatar">
+      ${avatarHtml}
+      <div class="friend-status-dot ${f.status || 'offline'}"></div>
+    </div>
+    <div class="friend-info">
+      <div class="friend-name">${escHtml(f.name)}</div>
+      <div class="friend-meta">
+        <span class="friend-time">${timeHtml}</span>
+      </div>
+    </div>
+    ${unreadHtml}
+  </div>`;
 }
 
 // ============================================
@@ -212,28 +309,37 @@ async function selectFriend(friendId) {
   const f = friends[friendId];
   if (!f) return;
 
-  // Update top bar
+  // Determine which account to use
+  if (f.account_ids && f.account_ids.length > 0) {
+    selectedAccountId = f.account_ids[0];
+  } else {
+    selectedAccountId = null;
+  }
+
+  // Update top bar with avatar
   chatFriendName.textContent = f.name;
-  const initial = (f.name || '?')[0]?.toUpperCase() || '?';
-  chatFriendAvatar.textContent = initial;
-  if (f.avatar_url) {
-    chatFriendAvatar.innerHTML = `<img src="${escHtml(f.avatar_url)}" style="width:100%;height:100%;border-radius:50%;" alt="">`;
+  const avatarSrc = avatarUrl(f.avatar_url);
+  if (avatarSrc) {
+    chatFriendAvatar.innerHTML = `<img src="${escHtml(avatarSrc)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" alt="">`;
+  } else {
+    const initial = (f.name || '?')[0]?.toUpperCase() || '?';
+    chatFriendAvatar.textContent = initial;
   }
 
   // Enable input
   messageInput.disabled = false;
   updateSendButton();
 
-  // Highlight friend
-  friendsList.querySelectorAll('.friend-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.friendId === friendId);
-  });
-
-  // Load messages from first available account for this friend
+  // Load messages
   await loadMessages(friendId);
 
-  // Highlight friend
+  // Re-render friends to update active state and clear unread badge
   renderFriends();
+
+  // Load custom emojis for this account
+  if (selectedAccountId) {
+    loadCustomEmojis(selectedAccountId);
+  }
 }
 
 // ============================================
@@ -242,7 +348,7 @@ async function selectFriend(friendId) {
 async function loadMessages(friendId) {
   const f = friends[friendId];
   if (!f || !f.account_ids || f.account_ids.length === 0) {
-    messagesList.innerHTML = '<div class="message system"><div class="message-content">No messages to display</div></div>';
+    messagesList.innerHTML = '<div class="message system"><div class="message-content">暂无消息</div></div>';
     return;
   }
 
@@ -256,10 +362,8 @@ async function loadMessages(friendId) {
   }
 
   if (messages.length === 0) {
-    messagesList.innerHTML = '<div class="message system"><div class="message-content">No messages yet. Say hello!</div></div>';
+    messagesList.innerHTML = '<div class="message system"><div class="message-content">暂无消息，打个招呼吧！</div></div>';
   } else {
-    // Show newest at bottom
-    messages.reverse();
     messagesList.innerHTML = messages.map(m => renderMessage(m, f)).join('');
   }
 
@@ -271,31 +375,32 @@ function renderMessage(m, friendInfo) {
   const time = new Date(m.timestamp * 1000);
   const timeStr = time.toLocaleDateString() + ' ' + time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  const isMe = m.author_account_id && accounts.some(a => {
-    // Check by matching: the author IS one of our accounts (not the friend)
-    return true; // Simplification: show all, style by author
-  });
-
   const attachmentsHtml = (m.attachments || []).map(att => {
+    const attUrl = avatarUrl(att.url); // use proxy for discord CDN
     if (att.content_type?.startsWith('image/')) {
-      return `<div class="message-attachment"><img src="${escHtml(att.url)}" alt="${escHtml(att.filename || '')}" loading="lazy"></div>`;
+      return `<div class="message-attachment"><img src="${escHtml(attUrl)}" alt="${escHtml(att.filename || '')}" loading="lazy"></div>`;
     } else if (att.content_type?.startsWith('video/')) {
-      return `<div class="message-attachment"><video src="${escHtml(att.url)}" controls></video></div>`;
+      return `<div class="message-attachment"><video src="${escHtml(attUrl)}" controls></video></div>`;
     } else {
-      return `<div class="message-attachment"><a href="${escHtml(att.url)}" target="_blank">📎 ${escHtml(att.filename || 'file')}</a></div>`;
+      return `<div class="message-attachment"><a href="${escHtml(att.url)}" target="_blank">📎 ${escHtml(att.filename || '文件')}</a></div>`;
     }
   }).join('');
 
-  const authorInitial = (m.author_name || '?')[0]?.toUpperCase() || '?';
+  // Render avatar: use author_avatar_url if available, else first letter
   const isOwn = accounts.some(a => a.account_id === m.author_account_id);
+  const avatarSrc = avatarUrl(m.author_avatar_url);
+  const authorInitial = (m.author_name || '?')[0]?.toUpperCase() || '?';
+  const avatarHtml = avatarSrc
+    ? `<img src="${escHtml(avatarSrc)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" alt="">`
+    : authorInitial;
 
   return `
-  <div class="message">
-    <div class="message-avatar">${authorInitial}</div>
+  <div class="message ${isOwn ? 'own' : ''}">
+    <div class="message-avatar">${avatarHtml}</div>
     <div class="message-content">
       <div class="message-author">
         ${escHtml(m.author_name)}
-        <span class="timestamp">${timeStr}${isOwn ? ' (you)' : ''}</span>
+        <span class="timestamp">${timeStr}${isOwn ? ' (我)' : ''}</span>
       </div>
       <div class="message-text">${renderMessageText(m.content)}</div>
       ${attachmentsHtml}
@@ -313,7 +418,8 @@ function renderMessageText(text) {
   // Discord custom emojis <:name:id>
   out = out.replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (_, animated, name, id) => {
     const ext = animated ? 'gif' : 'png';
-    return `<img class="custom-emoji" src="https://cdn.discordapp.com/emojis/${id}.${ext}" alt=":${name}:" title=":${name}:" style="width:22px;height:22px;vertical-align:middle;">`;
+    const emojiUrl = `${API_BASE}/avatar?url=${encodeURIComponent('https://cdn.discordapp.com/emojis/' + id + '.' + ext)}`;
+    return `<img class="custom-emoji" src="${emojiUrl}" alt=":${name}:" title=":${name}:" style="width:22px;height:22px;vertical-align:middle;">`;
   });
   // Links
   out = out.replace(/(https?:\/\/\S+)/g, '<a href="$1" target="_blank">$1</a>');
@@ -352,8 +458,9 @@ async function sendMessage() {
     messageInput.value = '';
     renderAttachmentPreview();
     await loadMessages(selectedFriendId);
+    await loadFriends(); // refresh sort order
   } catch (e) {
-    console.error('Send failed:', e);
+    console.error('发送失败:', e);
   } finally {
     messageInput.disabled = false;
     updateSendButton();
@@ -409,14 +516,19 @@ function renderAttachmentPreview() {
 }
 
 // ============================================
-// Emoji picker
+// Emoji picker (unicode + custom server emojis)
 // ============================================
 function setupEmojiPicker() {
-  emojiPicker.innerHTML = EMOJI_LIST.map(e =>
+  let html = '<div class="emoji-section"><div class="emoji-section-title">标准表情</div><div class="emoji-grid">';
+  html += EMOJI_LIST.map(e =>
     `<div class="emoji-item" data-emoji="${e}">${e}</div>`
   ).join('');
+  html += '</div></div>';
+  html += '<div class="emoji-section"><div class="emoji-section-title">服务器表情</div><div class="emoji-grid" id="custom-emoji-grid"><div class="emoji-loading">加载中...</div></div></div>';
+  emojiPicker.innerHTML = html;
 
-  emojiPicker.querySelectorAll('.emoji-item').forEach(el => {
+  // Standard emoji clicks
+  emojiPicker.querySelectorAll('.emoji-item[data-emoji]').forEach(el => {
     el.addEventListener('click', () => {
       const emoji = el.dataset.emoji;
       insertAtCursor(messageInput, emoji);
@@ -427,8 +539,54 @@ function setupEmojiPicker() {
   });
 }
 
-btnEmoji.addEventListener('click', () => {
+async function loadCustomEmojis(accountId) {
+  if (customEmojis[accountId]) {
+    renderCustomEmojis(customEmojis[accountId]);
+    return;
+  }
+  try {
+    const data = await api('GET', `/emojis/${accountId}`);
+    customEmojis[accountId] = data.emojis || [];
+    renderCustomEmojis(customEmojis[accountId]);
+  } catch (e) {
+    console.error('加载表情失败:', e);
+    const grid = document.getElementById('custom-emoji-grid');
+    if (grid) grid.innerHTML = '<div class="emoji-loading">加载失败</div>';
+  }
+}
+
+function renderCustomEmojis(emojis) {
+  const grid = document.getElementById('custom-emoji-grid');
+  if (!grid) return;
+  if (!emojis || emojis.length === 0) {
+    grid.innerHTML = '<div class="emoji-loading">暂无自定义表情</div>';
+    return;
+  }
+  grid.innerHTML = emojis.map(e => {
+    const url = avatarUrl(e.url);
+    const fmt = e.animated ? 'a' : '';
+    return `<div class="emoji-item custom-emoji-item" data-emoji-code="<${fmt}:${e.name}:${e.id}>" data-emoji-url="${escHtml(url)}" title="${escHtml(e.name)}">
+      <img src="${escHtml(url)}" alt=":${escHtml(e.name)}:" style="width:24px;height:24px;">
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.custom-emoji-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const code = el.dataset.emojiCode;
+      insertAtCursor(messageInput, code);
+      emojiPicker.classList.add('hidden');
+      messageInput.focus();
+      updateSendButton();
+    });
+  });
+}
+
+btnEmoji.addEventListener('click', (e) => {
+  e.stopPropagation();
   emojiPicker.classList.toggle('hidden');
+  if (!emojiPicker.classList.contains('hidden') && selectedAccountId) {
+    loadCustomEmojis(selectedAccountId);
+  }
 });
 
 // Close emoji picker when clicking outside
@@ -438,6 +596,17 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// ============================================
+// Auto-resize textarea
+// ============================================
+messageInput.addEventListener('input', () => {
+  messageInput.style.height = 'auto';
+  messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+});
+
+// ============================================
+// Misc helpers
+// ============================================
 function insertAtCursor(input, text) {
   const start = input.selectionStart;
   const end = input.selectionEnd;
@@ -477,7 +646,7 @@ $('btn-login-submit').addEventListener('click', async () => {
       await loadFriends();
     }
   } catch (e) {
-    loginError.textContent = 'Connection failed. Is the backend running?';
+    loginError.textContent = '连接失败，后端服务是否在运行？';
     loginError.classList.remove('hidden');
   } finally {
     $('btn-login-submit').disabled = false;
@@ -524,7 +693,7 @@ function escRegex(s) {
 }
 
 // ============================================
-// Poll for updates
+// Poll for updates — faster polling for near real-time
 // ============================================
 setInterval(async () => {
   await loadFriends();
@@ -532,7 +701,7 @@ setInterval(async () => {
     const currentSelected = selectedFriendId;
     await loadMessages(currentSelected);
   }
-}, 10000);
+}, 5000);
 
 // ============================================
 // Start

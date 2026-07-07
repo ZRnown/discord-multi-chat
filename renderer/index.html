@@ -1,70 +1,70 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Discord Multi-Chat</title>
+<title>Discord 多账号聊天</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- ========== SIDEBAR ========== -->
+<!-- ========== 侧边栏 ========== -->
 <div id="sidebar">
-  <!-- Account header -->
+  <!-- 账号区 -->
   <div id="accounts-header">
-    <span class="section-title">Accounts</span>
-    <button id="btn-add-account" title="Add Account">+</button>
+    <span class="section-title">账号</span>
+    <button id="btn-add-account" title="添加账号">+</button>
   </div>
   <div id="accounts-list"></div>
 
   <div class="divider"></div>
 
-  <!-- Friends list -->
+  <!-- 好友列表 -->
   <div id="friends-header">
-    <span class="section-title">Direct Messages</span>
+    <span class="section-title">私信</span>
   </div>
   <div id="friends-list"></div>
 </div>
 
-<!-- ========== CHAT PANEL ========== -->
+<!-- ========== 聊天面板 ========== -->
 <div id="chat-panel">
-  <!-- Chat top bar -->
+  <!-- 顶部栏 -->
   <div id="chat-topbar">
     <div id="chat-friend-info">
       <div id="chat-friend-avatar">?</div>
-      <div id="chat-friend-name">Select a friend to chat</div>
+      <div id="chat-friend-name">选择一个好友开始聊天</div>
     </div>
   </div>
 
-  <!-- Messages area -->
+  <!-- 消息区 -->
   <div id="messages-container">
     <div id="messages-list"></div>
   </div>
 
-  <!-- Input area -->
+  <!-- 输入区 -->
   <div id="input-area">
     <div id="attachment-preview"></div>
     <div id="input-row">
-      <button id="btn-attach" title="Attach file">📎</button>
+      <button id="btn-attach" title="发送文件">📎</button>
       <input type="file" id="file-input" multiple hidden>
-      <textarea id="message-input" placeholder="Type a message..." rows="1" disabled></textarea>
-      <button id="btn-emoji" title="Emoji">😊</button>
-      <button id="btn-send" disabled>Send</button>
+      <textarea id="message-input" placeholder="输入消息..." rows="1" disabled></textarea>
+      <button id="btn-emoji" title="表情">😊</button>
+      <button id="btn-send" disabled>发送</button>
     </div>
     <div id="emoji-picker" class="hidden"></div>
   </div>
 </div>
 
-<!-- ========== LOGIN MODAL ========== -->
+<!-- ========== 登录弹窗 ========== -->
 <div id="login-modal" class="modal">
   <div class="modal-content">
-    <h2>Add Discord Account</h2>
-    <p>Enter your Discord user token to login.</p>
-    <p class="hint">You can get your token from Discord's DevTools → Network tab → Authorization header.</p>
-    <input type="password" id="login-token-input" placeholder="Paste your token here...">
+    <h2>添加 Discord 账号</h2>
+    <p>输入你的 Discord 用户 token 来登录。</p>
+    <p class="hint">可以在 Discord 开发者工具（F12）的 Network 标签页中找到 Authorization 请求头获取 token。</p>
+    <input type="password" id="login-token-input" placeholder="在此粘贴 token...">
     <div class="modal-buttons">
-      <button id="btn-login-submit">Login</button>
-      <button id="btn-login-cancel" class="btn-secondary">Cancel</button>
+      <button id="btn-login-submit">登录</button>
+      <button id="btn-login-cancel" class="btn-secondary">取消</button>
     </div>
     <div id="login-error" class="error-text hidden"></div>
   </div>
